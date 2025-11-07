@@ -39,6 +39,7 @@ class RealEnv:
         self.WRIST = '246322303938'  # device id of the wrist camera
         num_cams = num_fixed_cams + (1 if use_wrist_cam else 0)
         self.serial_numbers = SingleRealsense.get_connected_devices_serial()
+        print(self.serial_numbers)
         assert len(self.serial_numbers) == num_cams
         if use_wrist_cam:
             assert self.WRIST in self.serial_numbers
@@ -424,6 +425,7 @@ class RealEnv:
             return rvecs, tvecs
 
     def calibrate(self, re_calibrate=False):
+        ############### Comment this part if only board
         if re_calibrate:
             if self.use_robot:
                 calibration_handeye_result = self.hand_eye_calibrate()
@@ -431,10 +433,17 @@ class RealEnv:
                 # t_gripper2wristcam = calibration_handeye_result['t_gripper2cam']
                 R_base2board = calibration_handeye_result['R_base2world']
                 t_base2board = calibration_handeye_result['t_base2world']
-            else:
+            else:e
                 R_base2board = None
                 t_base2board = None
             rvecs, tvecs = self.fixed_camera_calibrate()
+
+        ###########################
+        # if True:
+        #     R_base2board = None
+        #     t_base2board = None
+        #     rvecs, tvecs = self.fixed_camera_calibrate()
+        ###########################
         else:
             with open(f'{self.calibrate_result_dir}/calibration_handeye_result.pkl', 'rb') as f:
                 calibration_handeye_result = pickle.load(f)
@@ -449,6 +458,7 @@ class RealEnv:
         
         self.R_cam2world = {}
         self.t_cam2world = {}
+        ## comment out if only fixed camera calibration
         self.R_base2world = R_base2board
         self.t_base2world = t_base2board
 
