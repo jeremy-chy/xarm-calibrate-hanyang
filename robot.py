@@ -60,6 +60,18 @@ class Robot:
         camera_to_bases = pickle.load(open(camera_to_base_path, 'rb'))
         self.camera_to_base_matrix = camera_to_bases[serial_number]
         print("Calibration loaded successfully.")
+
+        # Load era_world matrices (camera_to_era_world, era_world_to_base)
+        try:
+            era_world_dict = pickle.load(open('era-world.pkl', 'rb'))
+            camera_to_era_world, era_world_to_base = era_world_dict[serial_number]
+            self.camera_to_era_world = camera_to_era_world
+            self.era_world_to_base = era_world_to_base
+            print("Loaded era_world transformation matrices successfully.")
+        except Exception as e:
+            print(f"Warning: Unable to load era_world transformations: {e}")
+            self.camera_to_era_world = None
+            self.era_world_to_base = None
         
         # Initialize vision module
         if all([grounding_dino_config_path, grounding_dino_checkpoint_path, sam_checkpoint_path]):
@@ -251,6 +263,32 @@ class Robot:
                         Each point is a numpy array of shape (3,) representing [x, y, z]
         """
         points_base = []
+        # For display: show transform to era-world and from era-world to base as well
+        for i, point_camera in enumerate(points_camera):
+            # Convert to homogeneous coordinates
+            point_homogeneous = np.append(point_camera, 1)  # Shape: (4,)
+
+            # Camera -> Base (original)
+            point_base_h = np.dot(self.camera_to_base_matrix, point_homogeneous)
+            point_base = point_base_h[:3]
+
+            # Camera -> Era-World
+            if self.camera_to_era_world is not None and self.era_world_to_base is not None:
+                point_era_world_h = np.dot(self.camera_to_era_world, point_homogeneous)
+                point_era_world = point_era_world_h[:3]
+
+                # Era-World -> Base
+                point_base_from_era_h = np.dot(self.era_world_to_base, point_era_world_h)
+                point_base_from_era = point_base_from_era_h[:3]
+
+                print(f"  Point {i+1}:")
+                print(f"    Camera : {point_camera}")
+                print(f"    EraWorld: {point_era_world}")
+                print(f"    Base (via era-world): {point_base_from_era}")
+                print(f"    Base (direct): {point_base}")
+            else:
+                print(f"  Point {i+1}: Camera {point_camera} -> Base {point_base} (era-world not available)")
+
         
         for i, point_camera in enumerate(points_camera):
             # Convert to homogeneous coordinates (add 1 as the 4th element)
@@ -507,7 +545,7 @@ if __name__ == "__main__":
             sam_checkpoint_path="/home/hanyang/Downloads/xarm-calibrate-hanyang/models/sam_vit_h_4b8939.pth",
             sam_model_type="vit_h"
         )
-        robot.execute(max_steps=3)
+        robot.execute(max_steps=1)
     except KeyboardInterrupt:
         print("\nInterrupted by user.")
     except Exception as e:
