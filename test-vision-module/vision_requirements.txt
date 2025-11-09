@@ -4,7 +4,7 @@
 torch>=2.0.0
 torchvision>=0.15.0
 numpy>=1.24.0
-opencv-python>=4.8.0
+# opencv-python>=4.8.0
 Pillow>=10.0.0
 
 # Grounding DINO 相关
@@ -12,12 +12,12 @@ Pillow>=10.0.0
 # git clone https://github.com/IDEA-Research/GroundingDINO.git
 # cd GroundingDINO
 # pip install -e .
-groundingdino
+# groundingdino
 
-# SAM (Segment Anything Model)
-# 需要从源码安装:
-# pip install git+https://github.com/facebookresearch/segment-anything.git
-segment-anything
+# # SAM (Segment Anything Model)
+# # 需要从源码安装:
+# # pip install git+https://github.com/facebookresearch/segment-anything.git
+# segment-anything
 
 # 其他工具
 supervision  # 用于可视化和后处理 (可选)

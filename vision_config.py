@@ -22,7 +22,7 @@ GROUNDING_DINO_CHECKPOINT = os.path.join(
 
 # ========== SAM 配置 ==========
 # SAM 模型类型选择: "vit_h", "vit_l", "vit_b"
-SAM_MODEL_TYPE = "vit_l"
+SAM_MODEL_TYPE = "vit_h"
 
 # 根据模型类型自动选择对应的权重文件
 SAM_CHECKPOINTS = {

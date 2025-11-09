@@ -291,10 +291,11 @@ class Robot:
             
             target_position_m = points_base[0]  # meters
             target_position_mm = target_position_m * 1000  # convert to mm
+
             
             action = np.array([
-                target_position_mm[0],
-                target_position_mm[1],
+                target_position_mm[0]-20,
+                target_position_mm[1]-30,
                 target_position_mm[2],
                 0  # Gripper closed (grasp)
             ])
@@ -321,21 +322,39 @@ class Robot:
             print(f"   Policy (step {step}): Lift object by 20cm to [{action[0]:.1f}, {action[1]:.1f}, {action[2]:.1f}] mm")
             return action
         
-        else:
+        elif step == 3:
             # Step 3+: Maintain position (same as step 2)
-            if not hasattr(self, 'last_grasp_position'):
-                raise ValueError("No previous grasp position found!")
+            target_position_m = points_base[1]  # meters
+            target_position_mm = target_position_m * 1000  # convert to mm
+
             
+            action = np.array([
+                target_position_mm[0]-20,
+                target_position_mm[1]-40,
+                target_position_mm[2] + 40, # for a stack operation
+                1  # Gripper open (stack)
+            ])
+            
+            # Save the grasp position for future steps
+            self.last_grasp_position = target_position_mm.copy()
+            
+            print(f"   Policy (step {step}): Stack object at [{target_position_mm[0]:.1f}, {target_position_mm[1]:.1f}, {target_position_mm[2]:.1f}] mm")
+            return action
+
+        else:
+
             lift_offset = 200  # mm (20cm)
             action = np.array([
                 self.last_grasp_position[0],
                 self.last_grasp_position[1],
                 self.last_grasp_position[2] + lift_offset,
-                0  # Gripper remains closed
+                1  # Gripper remains closed
             ])
             
-            print(f"   Policy (step {step}): Maintain position at [{action[0]:.1f}, {action[1]:.1f}, {action[2]:.1f}] mm")
+            print(f"   Policy (step {step}): Lift object by 20cm to [{action[0]:.1f}, {action[1]:.1f}, {action[2]:.1f}] mm")
             return action
+
+
     
     def grasp(self, target_vector):
         """
@@ -364,7 +383,7 @@ class Robot:
         # Gripper is 175mm below the flange center
         flange_x = target_x
         flange_y = target_y
-        flange_z = target_z - 175.0  # Subtract gripper height
+        flange_z = target_z + 175.0  # Subtract gripper height
         
         # Construct target pose [X, Y, Z, roll, pitch, yaw]
         # Keep orientation unchanged
@@ -478,11 +497,17 @@ class Robot:
 
 if __name__ == "__main__":
     # Example usage
-    serial_number = "your_camera_serial_number"  # Replace with actual serial number
+    serial_number = "311322303615"  # Replace with actual serial number
     
     try:
-        robot = Robot(serial_number=serial_number)
-        robot.execute(max_steps=10)
+        robot = Robot(
+            serial_number=serial_number,
+            grounding_dino_config_path="/home/hanyang/Downloads/xarm-calibrate-hanyang/GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py",
+            grounding_dino_checkpoint_path="/home/hanyang/Downloads/xarm-calibrate-hanyang/models/groundingdino_swint_ogc.pth",
+            sam_checkpoint_path="/home/hanyang/Downloads/xarm-calibrate-hanyang/models/sam_vit_h_4b8939.pth",
+            sam_model_type="vit_h"
+        )
+        robot.execute(max_steps=3)
     except KeyboardInterrupt:
         print("\nInterrupted by user.")
     except Exception as e:
