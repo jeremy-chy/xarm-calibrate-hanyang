@@ -4,8 +4,10 @@ import numpy as np
 import pyrealsense2 as rs
 import open3d as o3d
 import cv2
+import re
 from real_world.xarm6 import XARM6
 from vision_module import VisionModule
+from era_client import ERAClient
 
 
 class Robot:
@@ -20,7 +22,10 @@ class Robot:
         grounding_dino_config_path=None,
         grounding_dino_checkpoint_path=None,
         sam_checkpoint_path=None,
-        sam_model_type="vit_h"
+        sam_model_type="vit_h",
+        era_server_url="http://127.0.0.1:5050",
+        era_world_bounds=None,  # [[x_min, x_max], [y_min, y_max], [z_min, z_max]] in meters
+        coordinate_mode="discrete"  # "discrete" or "scaled"
     ):
         """
         Initialize the robot with camera and arm.
@@ -36,6 +41,12 @@ class Robot:
             grounding_dino_checkpoint_path: Path to Grounding DINO checkpoint
             sam_checkpoint_path: Path to SAM checkpoint
             sam_model_type: SAM model type (vit_h, vit_l, vit_b)
+            era_server_url: URL of the ERA model server
+            era_world_bounds: Bounds of the workspace in era_world frame (meters)
+                             [[x_min, x_max], [y_min, y_max], [z_min, z_max]]
+            coordinate_mode: Mode for coordinate conversion
+                            "discrete": continuous -> discrete int [0,100] -> continuous
+                            "scaled": continuous * 100 (float) -> model output -> / 100
         """
         print("Initializing Robot...")
         
@@ -86,6 +97,28 @@ class Robot:
         else:
             print("Warning: Vision module not initialized. Please provide model paths.")
             self.vision = None
+        
+        # Initialize ERA client for LLM-based policy
+        print(f"Initializing ERA client (server: {era_server_url})...")
+        self.era_client = ERAClient(server_url=era_server_url)
+        print("ERA client initialized successfully.")
+        
+        # Set era_world bounds for coordinate mapping
+        # Default: reasonable workspace bounds in meters
+        if era_world_bounds is None:
+            self.era_world_bounds = [[-0.3, 0.3], [-0.3, 0.3], [0.0, 0.4]]  # meters
+        else:
+            self.era_world_bounds = era_world_bounds
+        print(f"ERA world bounds set to: {self.era_world_bounds}")
+        
+        # Set coordinate mode
+        if coordinate_mode not in ["discrete", "scaled"]:
+            raise ValueError(f"coordinate_mode must be 'discrete' or 'scaled', got '{coordinate_mode}'")
+        self.coordinate_mode = coordinate_mode
+        print(f"Coordinate mode: {self.coordinate_mode}")
+        
+        # Initialize interaction history for policy
+        self.interaction_history = []
         
         print("Robot initialization complete!\n")
     
@@ -249,7 +282,7 @@ class Robot:
         
         return points_3d_list
     
-    def camera_to_base_transform(self, points_camera):
+    def camera_to_era_world_transform(self, points_camera):
         """
         Transform points from camera coordinate system to base coordinate system.
         Based on lines 66-68 from verify_stationary_cameras.py
@@ -262,7 +295,7 @@ class Robot:
             points_base: List of 3D points in base coordinate system
                         Each point is a numpy array of shape (3,) representing [x, y, z]
         """
-        points_base = []
+        points_era_world = []
         # For display: show transform to era-world and from era-world to base as well
         for i, point_camera in enumerate(points_camera):
             # Convert to homogeneous coordinates
@@ -276,121 +309,241 @@ class Robot:
             if self.camera_to_era_world is not None and self.era_world_to_base is not None:
                 point_era_world_h = np.dot(self.camera_to_era_world, point_homogeneous)
                 point_era_world = point_era_world_h[:3]
+                points_era_world.append(point_era_world)
 
-                # Era-World -> Base
-                point_base_from_era_h = np.dot(self.era_world_to_base, point_era_world_h)
-                point_base_from_era = point_base_from_era_h[:3]
-
-                print(f"  Point {i+1}:")
-                print(f"    Camera : {point_camera}")
-                print(f"    EraWorld: {point_era_world}")
-                print(f"    Base (via era-world): {point_base_from_era}")
-                print(f"    Base (direct): {point_base}")
-            else:
-                print(f"  Point {i+1}: Camera {point_camera} -> Base {point_base} (era-world not available)")
-
-        
-        for i, point_camera in enumerate(points_camera):
-            # Convert to homogeneous coordinates (add 1 as the 4th element)
-            point_homogeneous = np.append(point_camera, 1)  # Shape: (4,)
-            
-            # Apply transformation matrix
-            # Note: camera_to_base_matrix is a 4x4 transformation matrix
-            point_transformed_homogeneous = np.dot(self.camera_to_base_matrix, point_homogeneous)
-            
-            # Convert back to 3D coordinates (remove the homogeneous coordinate)
-            point_base = point_transformed_homogeneous[:3]
-            
-            print(f"  Point {i+1}: Camera {point_camera} -> Base {point_base}")
-            
-            points_base.append(point_base)
-        
-        return points_base
+        return points_era_world
     
-    def policy(self, step, color_image, points_base):
+    def era_world_to_discrete(self, points_era_world):
         """
-        Policy function to determine the next action.
+        Convert era_world coordinates (meters) to discrete [0, 100] coordinates.
+        Mode: "discrete" - rounds to integers
+        
+        Args:
+            points_era_world: List of 3D points in era_world coordinates (meters)
+        
+        Returns:
+            List of discrete 3D coordinates [X, Y, Z] in range [0, 100]
+        """
+        discrete_coords = []
+        for point in points_era_world:
+            discrete_point = []
+            for i, val in enumerate(point):
+                min_val, max_val = self.era_world_bounds[i]
+                # Map [min_val, max_val] to [0, 100]
+                discrete_val = int(round((val - min_val) / (max_val - min_val) * 100))
+                discrete_val = np.clip(discrete_val, 0, 100)
+                discrete_point.append(discrete_val)
+            discrete_coords.append(discrete_point)
+        return discrete_coords
+    
+    def era_world_to_scaled(self, points_era_world):
+        """
+        Convert era_world coordinates (meters) to scaled [0, 100] coordinates.
+        Mode: "scaled" - keeps as floats
+        
+        Args:
+            points_era_world: List of 3D points in era_world coordinates (meters)
+        
+        Returns:
+            List of scaled 3D coordinates [X, Y, Z] in range [0, 100] (floats)
+        """
+        scaled_coords = []
+        for point in points_era_world:
+            scaled_point = []
+            for i, val in enumerate(point):
+                min_val, max_val = self.era_world_bounds[i]
+                # Map [min_val, max_val] to [0, 100], keep as float
+                scaled_val = (val - min_val) / (max_val - min_val) * 100
+                scaled_val = np.clip(scaled_val, 0.0, 100.0)
+                scaled_point.append(scaled_val)
+            scaled_coords.append(scaled_point)
+        return scaled_coords
+    
+    def discrete_to_era_world(self, discrete_coords):
+        """
+        Convert discrete [0, 100] coordinates to era_world coordinates (meters).
+        Works for both discrete (int) and scaled (float) modes.
+        
+        Args:
+            discrete_coords: List or array of length 3 with discrete/scaled coordinates [X, Y, Z]
+        
+        Returns:
+            numpy array of 3D point in era_world coordinates (meters)
+        """
+        continuous_point = []
+        for i, discrete_val in enumerate(discrete_coords[:3]):  # Only X, Y, Z
+            min_val, max_val = self.era_world_bounds[i]
+            # Map [0, 100] to [min_val, max_val]
+            continuous_val = min_val + (discrete_val / 100.0) * (max_val - min_val)
+            continuous_point.append(continuous_val)
+        return np.array(continuous_point)
+    
+    def transform_era_world_to_base(self, point_era_world):
+        """
+        Transform a point from era_world coordinates to base coordinates.
+        
+        Args:
+            point_era_world: 3D point in era_world coordinates (meters)
+        
+        Returns:
+            3D point in base coordinates (meters)
+        """
+        if self.era_world_to_base is None:
+            raise RuntimeError("era_world_to_base transformation not available")
+        
+        # Convert to homogeneous coordinates
+        point_homogeneous = np.append(point_era_world, 1)
+        
+        # Apply transformation
+        point_base_h = np.dot(self.era_world_to_base, point_homogeneous)
+        
+        return point_base_h[:3]
+    
+    def policy(self, step, color_image, points_era_world, instruction="Pick up the object"):
+        """
+        LLM-based policy function to determine the next action.
         
         Args:
             step: Current step number (1-indexed)
             color_image: Color image from camera (numpy array, RGB format)
-            points_base: List of target object positions in base frame (meters)
+            points_era_world: List of target object positions in era-world frame (meters)
+            instruction: Task instruction string
         
         Returns:
             action: 4D vector [x, y, z, gripper_state] in millimeters
-                   - (x, y, z): target position in mm
+                   - (x, y, z): target position in base frame (mm)
                    - gripper_state: 1=open, 0=closed
         """
-        if step == 1:
-            # Step 1: Grasp the first object
-            # Target position: first object, gripper closed
-            if len(points_base) == 0:
-                raise ValueError("No objects detected! Cannot execute policy.")
-            
-            target_position_m = points_base[0]  # meters
-            target_position_mm = target_position_m * 1000  # convert to mm
-
-            
-            action = np.array([
-                target_position_mm[0]-20,
-                target_position_mm[1]-30,
-                target_position_mm[2],
-                0  # Gripper closed (grasp)
-            ])
-            
-            # Save the grasp position for future steps
-            self.last_grasp_position = target_position_mm.copy()
-            
-            print(f"   Policy (step {step}): Grasp first object at [{target_position_mm[0]:.1f}, {target_position_mm[1]:.1f}, {target_position_mm[2]:.1f}] mm")
-            return action
+        # Step 1: Convert points_era_world to model coordinates based on mode
+        if self.coordinate_mode == "discrete":
+            # Discrete mode: round to integers [0, 100]
+            model_coords = self.era_world_to_discrete(points_era_world)
+            print(f"   Using discrete mode: {model_coords}")
+        else:  # scaled
+            # Scaled mode: keep as floats [0, 100]
+            model_coords = self.era_world_to_scaled(points_era_world)
+            # Format floats with 2 decimal places for cleaner display
+            model_coords = [[round(x, 2) for x in coord] for coord in model_coords]
+            print(f"   Using scaled mode: {model_coords}")
         
-        elif step == 2:
-            # Step 2: Lift object by 20cm (200mm)
-            if not hasattr(self, 'last_grasp_position'):
-                raise ValueError("No previous grasp position found!")
-            
-            lift_offset = 200  # mm (20cm)
-            action = np.array([
-                self.last_grasp_position[0],
-                self.last_grasp_position[1],
-                self.last_grasp_position[2] + lift_offset,
-                0  # Gripper remains closed
-            ])
-            
-            print(f"   Policy (step {step}): Lift object by 20cm to [{action[0]:.1f}, {action[1]:.1f}, {action[2]:.1f}] mm")
-            return action
+        # Step 2: Format object_info string
+        # Format: {'object 1': [x, y, z], 'object 2': [x, y, z], ...}
+        object_info_dict = {f"'object {i+1}'": coord for i, coord in enumerate(model_coords)}
+        object_info = str(object_info_dict)
         
-        elif step == 3:
-            # Step 3+: Maintain position (same as step 2)
-            target_position_m = points_base[1]  # meters
-            target_position_mm = target_position_m * 1000  # convert to mm
-
+        # Step 3: Format interaction_history
+        interaction_history = str(self.interaction_history)
+        
+        # Step 4: Send image directly as numpy array (will be base64 encoded by client)
+        print(f"   Calling ERA model with:")
+        print(f"   - Coordinate mode: {self.coordinate_mode}")
+        print(f"   - Instruction: {instruction}")
+        print(f"   - Object info: {object_info}")
+        print(f"   - Interaction history: {interaction_history}")
+        
+        # Step 5: Call ERA client to get response
+        # Pass numpy array directly, client will handle base64 encoding
+        response = self.era_client.send_manipulation_request(
+            images=[color_image],  # Pass numpy array directly
+            instruction=instruction,
+            object_info=object_info,
+            interaction_history=interaction_history,
+            encode_to_base64=True  # Enable base64 encoding for remote server
+        )
+        
+        print(f"   ERA model response: {response}")
+        
+        # Step 6: Parse response to extract action
+        # Expected format: <|action_start|>[X, Y, Z, Roll, Pitch, Yaw, Gripper]<|action_end|>
+        action_parsed = self._parse_era_response(response)
+        
+        if action_parsed is None:
+            raise ValueError("Failed to parse action from ERA model response")
+        
+        print(f"   Parsed model action: {action_parsed}")
+        
+        # Step 7: Convert model action to continuous era_world coordinates
+        # action_parsed = [X, Y, Z, Roll, Pitch, Yaw, Gripper]
+        position_model = action_parsed[:3]
+        gripper_state = action_parsed[6]
+        
+        # Convert back to era_world (works for both modes)
+        position_era_world = self.discrete_to_era_world(position_model)
+        print(f"   Era-world position (m): {position_era_world}")
+        
+        # Step 8: Transform to base coordinates
+        position_base = self.transform_era_world_to_base(position_era_world)
+        print(f"   Base position (m): {position_base}")
+        
+        # Step 9: Convert to millimeters
+        position_base_mm = position_base * 1000
+        
+        # Step 10: Construct 4D action vector
+        action = np.array([
+            position_base_mm[0],
+            position_base_mm[1],
+            position_base_mm[2],
+            gripper_state
+        ])
+        
+        # Step 11: Update interaction history
+        # self.interaction_history.append(action_parsed)
+        
+        print(f"   Policy (step {step}): Action [{action[0]:.1f}, {action[1]:.1f}, {action[2]:.1f}, {action[3]}] mm")
+        
+        return action
+    
+    def _parse_era_response(self, response):
+        """
+        Parse ERA model response to extract action vector.
+        
+        Args:
+            response: String response from ERA model
+        
+        Returns:
+            List of 7 numbers [X, Y, Z, Roll, Pitch, Yaw, Gripper]
+            In discrete mode: integers
+            In scaled mode: can be floats
+            Returns None if parsing fails
+        """
+        # Look for action between <|action_start|> and <|action_end|>
+        pattern = r'<\|action_start\|>(.*?)<\|action_end\|>'
+        match = re.search(pattern, response, re.DOTALL)
+        
+        if not match:
+            print("   Warning: Could not find action tags in response")
+            return None
+        
+        action_str = match.group(1).strip()
+        
+        # Remove brackets and parse numbers
+        action_str = action_str.strip('[]')
+        
+        try:
+            # Split by comma and convert to numbers
+            if self.coordinate_mode == "discrete":
+                # Discrete mode: convert to integers
+                action_values = [int(float(x.strip())) for x in action_str.split(',')]
+            else:  # scaled
+                # Scaled mode: keep as floats for X, Y, Z; int for Roll, Pitch, Yaw, Gripper
+                parts = [x.strip() for x in action_str.split(',')]
+                action_values = []
+                for i, part in enumerate(parts):
+                    val = float(part)
+                    # Keep X, Y, Z as floats; convert Roll, Pitch, Yaw, Gripper to ints
+                    if i < 3:  # X, Y, Z
+                        action_values.append(val)
+                    else:  # Roll, Pitch, Yaw, Gripper
+                        action_values.append(int(val))
             
-            action = np.array([
-                target_position_mm[0]-20,
-                target_position_mm[1]-40,
-                target_position_mm[2] + 40, # for a stack operation
-                1  # Gripper open (stack)
-            ])
+            if len(action_values) != 7:
+                print(f"   Warning: Expected 7 values, got {len(action_values)}")
+                return None
             
-            # Save the grasp position for future steps
-            self.last_grasp_position = target_position_mm.copy()
-            
-            print(f"   Policy (step {step}): Stack object at [{target_position_mm[0]:.1f}, {target_position_mm[1]:.1f}, {target_position_mm[2]:.1f}] mm")
-            return action
-
-        else:
-
-            lift_offset = 200  # mm (20cm)
-            action = np.array([
-                self.last_grasp_position[0],
-                self.last_grasp_position[1],
-                self.last_grasp_position[2] + lift_offset,
-                1  # Gripper remains closed
-            ])
-            
-            print(f"   Policy (step {step}): Lift object by 20cm to [{action[0]:.1f}, {action[1]:.1f}, {action[2]:.1f}] mm")
-            return action
+            return action_values
+        except Exception as e:
+            print(f"   Warning: Failed to parse action values: {e}")
+            return None
 
 
     
@@ -455,13 +608,15 @@ class Robot:
         
         print(f"   ✓ Grasp operation completed")
     
-    def execute(self, max_steps=100, instruction="find all cubes"):
+    def execute(self, max_steps=100, vision_instruction="find all cubes", 
+                task_instruction="Pick up the object"):
         """
         Execute the grasping task in a loop.
         
         Args:
             max_steps: Maximum number of steps to execute
-            instruction: Text instruction for object detection (e.g., "find all cubes")
+            vision_instruction: Text instruction for object detection (e.g., "find all cubes")
+            task_instruction: Text instruction for the policy/task (e.g., "Pick up the red cube")
         """
         print("Starting execution...")
         step = 0
@@ -475,8 +630,8 @@ class Robot:
             print("   ✓ Frame captured successfully")
             
             # Step 2: Get object masks from vision module
-            print(f"2. Getting object masks from vision module (instruction: '{instruction}')...")
-            masks, boxes, scores = self.get_object_mask(color_frame, instruction=instruction)
+            print(f"2. Getting object masks from vision module (instruction: '{vision_instruction}')...")
+            masks, boxes, scores = self.get_object_mask(color_frame, instruction=vision_instruction)
             print(f"   ✓ Detected {len(masks)} objects")
             
             # Check if any objects were detected
@@ -496,10 +651,10 @@ class Robot:
                 step += 1
                 continue
             
-            # Step 4: Transform to base frame
-            print("4. Transforming coordinates to base frame...")
-            points_base = self.camera_to_base_transform(points_camera)
-            print(f"   ✓ Transformed {len(points_base)} points to base frame")
+            # Step 4: Transform to era-world frame
+            print("4. Transforming coordinates to era-world frame...")
+            points_era_world = self.camera_to_era_world_transform(points_camera)
+            print(f"   ✓ Transformed {len(points_era_world)} points to era-world frame")
             
             # Step 5: Execute action from policy
             print("5. Executing action from policy...")
@@ -508,7 +663,7 @@ class Robot:
             color_image = np.asanyarray(color_frame.get_data())
             
             # Call policy to get the 4D action vector
-            action = self.policy(step + 1, color_image, points_base)
+            action = self.policy(step + 1, color_image, points_era_world, instruction=task_instruction)
             
             # Execute the action using grasp
             print(f"   Executing action: [{action[0]:.1f}, {action[1]:.1f}, {action[2]:.1f}, {action[3]}]")
@@ -543,9 +698,19 @@ if __name__ == "__main__":
             grounding_dino_config_path="/home/hanyang/Downloads/xarm-calibrate-hanyang/GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py",
             grounding_dino_checkpoint_path="/home/hanyang/Downloads/xarm-calibrate-hanyang/models/groundingdino_swint_ogc.pth",
             sam_checkpoint_path="/home/hanyang/Downloads/xarm-calibrate-hanyang/models/sam_vit_h_4b8939.pth",
-            sam_model_type="vit_h"
+            sam_model_type="vit_h",
+            era_server_url="http://127.0.0.1:5050",  # ERA model server URL (can be remote)
+            coordinate_mode="discrete"  # "discrete" (int) or "scaled" (float)
         )
-        robot.execute(max_steps=1)
+        
+        # Execute with LLM-based policy
+        # vision_instruction: what to detect with the vision module
+        # task_instruction: what task to perform (for the LLM policy)
+        robot.execute(
+            max_steps=5,
+            vision_instruction="find all cubes",
+            task_instruction="Pick up the red cube and place it on the blue cube"
+        )
     except KeyboardInterrupt:
         print("\nInterrupted by user.")
     except Exception as e:
