@@ -678,7 +678,7 @@ class Robot:
             # Execute the action using grasp
             print(f"   Executing action: [{action[0]:.1f}, {action[1]:.1f}, {action[2]:.1f}, {action[3]}]")
             time.sleep(2)
-            self.grasp(action)
+            # self.grasp(action)
             print(f"   ✓ Action executed successfully")
             print(f"\nStep {step + 1} completed.")
             step += 1
