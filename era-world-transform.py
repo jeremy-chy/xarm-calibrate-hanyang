@@ -2,8 +2,8 @@ import pickle
 import numpy as np
 import cv2
 
-rvecs = pickle.load(open('real_world/calibration_result1/rvecs.pkl', 'rb'))
-tvecs = pickle.load(open('real_world/calibration_result1/tvecs.pkl', 'rb'))
+rvecs = pickle.load(open('real_world/calibration_result_unflip_era_world/rvecs.pkl', 'rb'))
+tvecs = pickle.load(open('real_world/calibration_result_unflip_era_world/tvecs.pkl', 'rb'))
 
 camera_to_bases = pickle.load(open('real_world/calibration_result/camera_to_bases.pkl', 'rb'))
 
