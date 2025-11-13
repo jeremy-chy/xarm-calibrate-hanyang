@@ -433,7 +433,7 @@ class RealEnv:
                 # t_gripper2wristcam = calibration_handeye_result['t_gripper2cam']
                 R_base2board = calibration_handeye_result['R_base2world']
                 t_base2board = calibration_handeye_result['t_base2world']
-            else:e
+            else:
                 R_base2board = None
                 t_base2board = None
             rvecs, tvecs = self.fixed_camera_calibrate()

@@ -23,7 +23,7 @@ class Robot:
         grounding_dino_checkpoint_path=None,
         sam_checkpoint_path=None,
         sam_model_type="vit_h",
-        era_server_url="http://127.0.0.1:5050",
+        era_server_url="http://chicago.huan-zhang.com:22221",
         era_world_bounds=None,  # [[x_min, x_max], [y_min, y_max], [z_min, z_max]] in meters
         coordinate_mode="discrete"  # "discrete" or "scaled"
     ):
@@ -106,7 +106,7 @@ class Robot:
         # Set era_world bounds for coordinate mapping
         # Default: reasonable workspace bounds in meters
         if era_world_bounds is None:
-            self.era_world_bounds = [[-0.3, 0.3], [-0.3, 0.3], [0.0, 0.4]]  # meters
+            self.era_world_bounds = [[0.0, 0.6], [0.0, 0.6], [-0.1, 0.1]]  # meters
         else:
             self.era_world_bounds = era_world_bounds
         print(f"ERA world bounds set to: {self.era_world_bounds}")
@@ -324,6 +324,7 @@ class Robot:
         Returns:
             List of discrete 3D coordinates [X, Y, Z] in range [0, 100]
         """
+        print(f"   Points in era_world: {points_era_world}")
         discrete_coords = []
         for point in points_era_world:
             discrete_point = []
@@ -331,7 +332,7 @@ class Robot:
                 min_val, max_val = self.era_world_bounds[i]
                 # Map [min_val, max_val] to [0, 100]
                 discrete_val = int(round((val - min_val) / (max_val - min_val) * 100))
-                discrete_val = np.clip(discrete_val, 0, 100)
+                #discrete_val = np.clip(discrete_val, 0, 100)
                 discrete_point.append(discrete_val)
             discrete_coords.append(discrete_point)
         return discrete_coords
@@ -354,7 +355,7 @@ class Robot:
                 min_val, max_val = self.era_world_bounds[i]
                 # Map [min_val, max_val] to [0, 100], keep as float
                 scaled_val = (val - min_val) / (max_val - min_val) * 100
-                scaled_val = np.clip(scaled_val, 0.0, 100.0)
+                # scaled_val = np.clip(scaled_val, 0.0, 100.0)
                 scaled_point.append(scaled_val)
             scaled_coords.append(scaled_point)
         return scaled_coords
@@ -425,10 +426,13 @@ class Robot:
             # Format floats with 2 decimal places for cleaner display
             model_coords = [[round(x, 2) for x in coord] for coord in model_coords]
             print(f"   Using scaled mode: {model_coords}")
+
+        # Reorder model_coords in ascending order by the 1st index (the 2nd element)
+        model_coords = sorted(model_coords, key=lambda x: x[1])
         
         # Step 2: Format object_info string
         # Format: {'object 1': [x, y, z], 'object 2': [x, y, z], ...}
-        object_info_dict = {f"'object {i+1}'": coord for i, coord in enumerate(model_coords)}
+        object_info_dict = {f"object {i+1}": coord for i, coord in enumerate(model_coords)}
         object_info = str(object_info_dict)
         
         # Step 3: Format interaction_history
@@ -456,6 +460,9 @@ class Robot:
         # Step 6: Parse response to extract action
         # Expected format: <|action_start|>[X, Y, Z, Roll, Pitch, Yaw, Gripper]<|action_end|>
         action_parsed = self._parse_era_response(response)
+
+        # we need to subtract 9 from the z coordinate of the action_parsed
+        # action_parsed[2] -= 9
         
         if action_parsed is None:
             raise ValueError("Failed to parse action from ERA model response")
@@ -466,6 +473,9 @@ class Robot:
         # action_parsed = [X, Y, Z, Roll, Pitch, Yaw, Gripper]
         position_model = action_parsed[:3]
         gripper_state = action_parsed[6]
+
+        # position_model = model_coords[0]
+        # gripper_state = 0
         
         # Convert back to era_world (works for both modes)
         position_era_world = self.discrete_to_era_world(position_model)
@@ -487,9 +497,9 @@ class Robot:
         ])
         
         # Step 11: Update interaction history
-        # self.interaction_history.append(action_parsed)
+        self.interaction_history.append(action_parsed)
         
-        print(f"   Policy (step {step}): Action [{action[0]:.1f}, {action[1]:.1f}, {action[2]:.1f}, {action[3]}] mm")
+        print(f"   Policy (step {step}): Action [{action[0]}, {action[1]}, {action[2]}, {action[3]}] mm")
         
         return action
     
@@ -580,8 +590,8 @@ class Robot:
         # Keep orientation unchanged
         target_pose = [flange_x, flange_y, flange_z, current_roll, current_pitch, current_yaw]
         
-        print(f"   Moving to position: gripper=({target_x:.1f}, {target_y:.1f}, {target_z:.1f}), "
-              f"flange=({flange_x:.1f}, {flange_y:.1f}, {flange_z:.1f})")
+        print(f"   Moving to position: gripper=({target_x}, {target_y}, {target_z}), "
+              f"flange=({flange_x}, {flange_y}, {flange_z})")
         
         # Move arm to target position
         self.arm.move_to_pose(pose=target_pose, wait=True, ignore_error=False)
@@ -667,18 +677,11 @@ class Robot:
             
             # Execute the action using grasp
             print(f"   Executing action: [{action[0]:.1f}, {action[1]:.1f}, {action[2]:.1f}, {action[3]}]")
+            time.sleep(2)
             self.grasp(action)
             print(f"   ✓ Action executed successfully")
-            
             print(f"\nStep {step + 1} completed.")
             step += 1
-            
-            # TODO: Add termination condition
-            # - Break if task is complete
-            # - Break if no objects detected
-            # - Break on error
-            
-        print("\nExecution finished!")
     
     def cleanup(self):
         """Clean up resources."""
@@ -699,7 +702,7 @@ if __name__ == "__main__":
             grounding_dino_checkpoint_path="/home/hanyang/Downloads/xarm-calibrate-hanyang/models/groundingdino_swint_ogc.pth",
             sam_checkpoint_path="/home/hanyang/Downloads/xarm-calibrate-hanyang/models/sam_vit_h_4b8939.pth",
             sam_model_type="vit_h",
-            era_server_url="http://127.0.0.1:5050",  # ERA model server URL (can be remote)
+            era_server_url="http://chicago.huan-zhang.com:22221",  # ERA model server URL (can be remote)
             coordinate_mode="discrete"  # "discrete" (int) or "scaled" (float)
         )
         
@@ -707,9 +710,9 @@ if __name__ == "__main__":
         # vision_instruction: what to detect with the vision module
         # task_instruction: what task to perform (for the LLM policy)
         robot.execute(
-            max_steps=5,
-            vision_instruction="find all cubes",
-            task_instruction="Pick up the red cube and place it on the blue cube"
+            max_steps=1,
+            vision_instruction="find all the cubes",
+            task_instruction="Pick up the red cube and place it on the green cube"
         )
     except KeyboardInterrupt:
         print("\nInterrupted by user.")
