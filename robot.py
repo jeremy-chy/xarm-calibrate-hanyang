@@ -6,7 +6,7 @@ import open3d as o3d
 import cv2
 import re
 from real_world.xarm6 import XARM6
-from vision_module import VisionModule
+from vision_module_new import VisionModule
 from era_client import ERAClient
 
 
@@ -85,11 +85,11 @@ class Robot:
             self.era_world_to_base = None
         
         # Initialize vision module
-        if all([grounding_dino_config_path, grounding_dino_checkpoint_path, sam_checkpoint_path]):
+        if all([sam_checkpoint_path]):
             print("Initializing vision module...")
             self.vision = VisionModule(
-                grounding_dino_config_path=grounding_dino_config_path,
-                grounding_dino_checkpoint_path=grounding_dino_checkpoint_path,
+                # grounding_dino_config_path=grounding_dino_config_path,
+                # grounding_dino_checkpoint_path=grounding_dino_checkpoint_path,
                 sam_checkpoint_path=sam_checkpoint_path,
                 sam_model_type=sam_model_type
             )
@@ -119,6 +119,8 @@ class Robot:
         
         # Initialize interaction history for policy
         self.interaction_history = []
+
+        self.saved_object_info = None
         
         print("Robot initialization complete!\n")
     
@@ -435,8 +437,12 @@ class Robot:
         object_info_dict = {f"object {i+1}": coord for i, coord in enumerate(model_coords)}
         object_info = str(object_info_dict)
         
-        # Step 3: Format interaction_history
-        interaction_history = str(self.interaction_history)
+        # Step 3: Format interaction_history - only use the last element as a single-element list
+        if len(self.interaction_history) > 0:
+            interaction_history_context = [self.interaction_history[-1]]
+        else:
+            interaction_history_context = []
+        interaction_history = str(interaction_history_context)
         
         # Step 4: Send image directly as numpy array (will be base64 encoded by client)
         print(f"   Calling ERA model with:")
@@ -444,6 +450,13 @@ class Robot:
         print(f"   - Instruction: {instruction}")
         print(f"   - Object info: {object_info}")
         print(f"   - Interaction history: {interaction_history}")
+
+        if self.saved_object_info is None:
+            self.saved_object_info = object_info
+            print(f"   Saved object_info for future steps: {object_info}")
+        else:
+            object_info = self.saved_object_info
+            print(f"   Reusing saved object_info: {object_info}")
         
         # Step 5: Call ERA client to get response
         # Pass numpy array directly, client will handle base64 encoding
@@ -457,16 +470,17 @@ class Robot:
         
         print(f"   ERA model response: {response}")
         
-        # Step 6: Parse response to extract action
-        # Expected format: <|action_start|>[X, Y, Z, Roll, Pitch, Yaw, Gripper]<|action_end|>
-        action_parsed = self._parse_era_response(response)
+        # Step 6: Parse response to extract both thinking and action
+        # Expected format: <|think_start|>...<|think_end|><|action_start|>[X, Y, Z, Roll, Pitch, Yaw, Gripper]<|action_end|>
+        action_parsed, think_text, parse_success = self._parse_era_response(response)
 
         # we need to subtract 9 from the z coordinate of the action_parsed
         # action_parsed[2] -= 9
         
-        if action_parsed is None:
+        if not parse_success or action_parsed is None or len(action_parsed) == 0:
             raise ValueError("Failed to parse action from ERA model response")
         
+        print(f"   Parsed model thinking: {think_text}")
         print(f"   Parsed model action: {action_parsed}")
         
         # Step 7: Convert model action to continuous era_world coordinates
@@ -496,8 +510,14 @@ class Robot:
             gripper_state
         ])
         
-        # Step 11: Update interaction history
-        self.interaction_history.append(action_parsed)
+        # Step 11: Update interaction history with JSON format
+        step_history_entry = {
+            "step_id": step - 1,  # 0-indexed for history
+            "thinking": think_text,
+            "action": action_parsed,
+            "env_feedback": ""  # Will be filled later if needed
+        }
+        self.interaction_history.append(step_history_entry)
         
         print(f"   Policy (step {step}): Action [{action[0]}, {action[1]}, {action[2]}, {action[3]}] mm")
         
@@ -505,55 +525,59 @@ class Robot:
     
     def _parse_era_response(self, response):
         """
-        Parse ERA model response to extract action vector.
+        Parse ERA model response to extract thinking and action.
         
         Args:
             response: String response from ERA model
         
         Returns:
-            List of 7 numbers [X, Y, Z, Roll, Pitch, Yaw, Gripper]
-            In discrete mode: integers
-            In scaled mode: can be floats
-            Returns None if parsing fails
+            Tuple of (action_list, think_text, parse_success):
+            - action_list: List of 7 numbers [X, Y, Z, Roll, Pitch, Yaw, Gripper]
+                          In discrete mode: integers
+                          In scaled mode: can be floats
+            - think_text: String containing the thinking process
+            - parse_success: Boolean indicating if parsing was successful
         """
-        # Look for action between <|action_start|> and <|action_end|>
-        pattern = r'<\|action_start\|>(.*?)<\|action_end\|>'
-        match = re.search(pattern, response, re.DOTALL)
-        
-        if not match:
-            print("   Warning: Could not find action tags in response")
-            return None
-        
-        action_str = match.group(1).strip()
-        
-        # Remove brackets and parse numbers
-        action_str = action_str.strip('[]')
-        
-        try:
-            # Split by comma and convert to numbers
-            if self.coordinate_mode == "discrete":
-                # Discrete mode: convert to integers
-                action_values = [int(float(x.strip())) for x in action_str.split(',')]
-            else:  # scaled
-                # Scaled mode: keep as floats for X, Y, Z; int for Roll, Pitch, Yaw, Gripper
-                parts = [x.strip() for x in action_str.split(',')]
-                action_values = []
-                for i, part in enumerate(parts):
-                    val = float(part)
-                    # Keep X, Y, Z as floats; convert Roll, Pitch, Yaw, Gripper to ints
-                    if i < 3:  # X, Y, Z
-                        action_values.append(val)
-                    else:  # Roll, Pitch, Yaw, Gripper
-                        action_values.append(int(val))
-            
-            if len(action_values) != 7:
-                print(f"   Warning: Expected 7 values, got {len(action_values)}")
-                return None
-            
-            return action_values
-        except Exception as e:
-            print(f"   Warning: Failed to parse action values: {e}")
-            return None
+        # Extract raw string between think_start and think_end
+        think_match = re.search(r"<\|think_start\|\>(.*?)<\|think_end\|\>", response, re.DOTALL)
+        if think_match:
+            try:
+                think_text = think_match.group(1).strip()
+                think_format_correct = True
+            except:
+                think_format_correct = False
+                think_text = "[No think block found]"
+        else:
+            think_format_correct = False
+            think_text = "[No think block found]"
+
+        # Extract the first action
+        action_match = re.search(r"<\|action_start\|\>\[(.*?)\]<\|action_end\|\>", response)
+        if action_match:
+            try:
+                if self.coordinate_mode == "discrete":
+                    # Discrete mode: convert to integers
+                    action_list = [int(x.strip()) for x in action_match.group(1).split(',')]
+                else:  # scaled
+                    # Scaled mode: keep as floats for X, Y, Z; int for Roll, Pitch, Yaw, Gripper
+                    parts = [x.strip() for x in action_match.group(1).split(',')]
+                    action_list = []
+                    for i, part in enumerate(parts):
+                        val = float(part)
+                        # Keep X, Y, Z as floats; convert Roll, Pitch, Yaw, Gripper to ints
+                        if i < 3:  # X, Y, Z
+                            action_list.append(val)
+                        else:  # Roll, Pitch, Yaw, Gripper
+                            action_list.append(int(val))
+                action_format_correct = True
+            except:
+                action_format_correct = False
+                action_list = []
+        else:
+            action_format_correct = False
+            action_list = []
+
+        return action_list, think_text, think_format_correct and action_format_correct
 
 
     
@@ -698,8 +722,8 @@ if __name__ == "__main__":
     try:
         robot = Robot(
             serial_number=serial_number,
-            grounding_dino_config_path="/home/hanyang/Downloads/xarm-calibrate-hanyang/GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py",
-            grounding_dino_checkpoint_path="/home/hanyang/Downloads/xarm-calibrate-hanyang/models/groundingdino_swint_ogc.pth",
+            # grounding_dino_config_path="/home/hanyang/Downloads/xarm-calibrate-hanyang/GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py",
+            # grounding_dino_checkpoint_path="/home/hanyang/Downloads/xarm-calibrate-hanyang/models/groundingdino_swint_ogc.pth",
             sam_checkpoint_path="/home/hanyang/Downloads/xarm-calibrate-hanyang/models/sam_vit_h_4b8939.pth",
             sam_model_type="vit_h",
             era_server_url="http://chicago.huan-zhang.com:22221",  # ERA model server URL (can be remote)
