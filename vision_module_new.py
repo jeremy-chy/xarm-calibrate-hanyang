@@ -55,7 +55,7 @@ class VisionModule:
             api_key=api_key or os.getenv("DASHSCOPE_API_KEY"),
             base_url=base_url
         )
-        self.model_name = "qwen3-vl-8b-instruct"
+        self.model_name = "qwen3-vl-32b-instruct"
         print("✓ Qwen VLM 客户端初始化完成")
         
         # ========== 初始化 SAM (Segment Anything Model) ==========
