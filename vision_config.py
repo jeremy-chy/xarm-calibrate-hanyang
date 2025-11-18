@@ -86,8 +86,8 @@ def get_vision_config():
     可以直接传递给 VisionModule 构造函数
     """
     return {
-        "grounding_dino_config_path": GROUNDING_DINO_CONFIG,
-        "grounding_dino_checkpoint_path": GROUNDING_DINO_CHECKPOINT,
+        # "grounding_dino_config_path": GROUNDING_DINO_CONFIG,
+        # "grounding_dino_checkpoint_path": GROUNDING_DINO_CHECKPOINT,
         "sam_checkpoint_path": SAM_CHECKPOINT,
         "sam_model_type": SAM_MODEL_TYPE,
         "device": DEVICE,

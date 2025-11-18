@@ -94,9 +94,9 @@ class VisionModule:
         user_prompt = (
             f"{instruction}\n"
             "For each object, return its bounding box coordinates.\n"
-            "Be strict with the following format exactly:\n"
+            "Strictly follow the format below:\n"
             "{\n"
-            '  "cubes": [\n'
+            '  "objects": [\n'
             "    {\n"
             '      "id": 0,\n'
             '      "bbox": {\n'
@@ -109,7 +109,7 @@ class VisionModule:
             "  ]\n"
             "}\n"
             "Coordinates should be in the range [0, 1000].\n"
-            "If there are no objects, return {\"cubes\": []}."
+            "If there are no objects, return {\"objects\": []}."
         )
         
         # 调用 Qwen VLM API
@@ -192,16 +192,16 @@ class VisionModule:
         detection_result = self._detect_objects_with_qwen(image_path, instruction)
         
         # 解析检测结果
-        cubes = detection_result.get("cubes", [])
-        print(f"[Qwen VLM] 检测到 {len(cubes)} 个目标物体")
+        objects = detection_result.get("objects", [])
+        print(f"[Qwen VLM] 检测到 {len(objects)} 个目标物体")
         
         # 转换坐标：从相对坐标 (0-1000) 转换为像素坐标 (xyxy 格式)
         boxes_xyxy = []
         labels = []
         
-        for i, cube in enumerate(cubes):
-            cube_id = cube.get("id", i)
-            bbox = cube.get("bbox", {})
+        for i, object in enumerate(objects):
+            object_id = object.get("id", i)
+            bbox = object.get("bbox", {})
             
             # 提取相对坐标 (0-1000)
             rel_x_min = bbox.get("x_min")
@@ -220,9 +220,9 @@ class VisionModule:
             abs_y_max = int(rel_y_max / 1000 * h)
             
             boxes_xyxy.append([abs_x_min, abs_y_min, abs_x_max, abs_y_max])
-            labels.append(f"Cube {cube_id}")
+            labels.append(f"Object {object_id}")
             
-            print(f"  目标 {i+1}: Cube {cube_id}")
+            print(f"  目标 {i+1}: Object {object_id}")
             print(f"         边界框 (xyxy): [{abs_x_min}, {abs_y_min}, {abs_x_max}, {abs_y_max}]")
         
         boxes_xyxy = np.array(boxes_xyxy)

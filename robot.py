@@ -106,7 +106,7 @@ class Robot:
         # Set era_world bounds for coordinate mapping
         # Default: reasonable workspace bounds in meters
         if era_world_bounds is None:
-            self.era_world_bounds = [[0.0, 0.6], [0.0, 0.6], [0.0, 0.5]]  # meters
+            self.era_world_bounds = [[0.0, 0.6], [0.0, 0.6], [0.0, 0.4]]  # meters
         else:
             self.era_world_bounds = era_world_bounds
         print(f"ERA world bounds set to: {self.era_world_bounds}")
@@ -606,7 +606,7 @@ class Robot:
         
         # Calculate flange position from gripper position
         # Gripper is 175mm below the flange center
-        flange_x = target_x
+        flange_x = target_x - 15.0
         flange_y = target_y
         flange_z = target_z + 175.0  # Subtract gripper height
         
@@ -701,7 +701,7 @@ class Robot:
             
             # Execute the action using grasp
             print(f"   Executing action: [{action[0]:.1f}, {action[1]:.1f}, {action[2]:.1f}, {action[3]}]")
-            time.sleep(2)
+
             self.grasp(action)
             print(f"   ✓ Action executed successfully")
             print(f"\nStep {step + 1} completed.")
@@ -735,8 +735,8 @@ if __name__ == "__main__":
         # task_instruction: what task to perform (for the LLM policy)
         robot.execute(
             max_steps=5,
-            vision_instruction="find all three cube-like objects including one yellow sponge",
-            task_instruction="Pick up the red cube and stack it on top of the yellow cube"
+            vision_instruction="find all cubes and all bowls on the table",
+            task_instruction="Put the red cube into the blue bowl"
         )
     except KeyboardInterrupt:
         print("\nInterrupted by user.")

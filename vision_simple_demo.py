@@ -3,7 +3,7 @@
 使用配置文件，更容易上手
 """
 
-from vision_module import VisionModule
+from vision_module_new import VisionModule
 from vision_config import get_vision_config, verify_config
 import numpy as np
 
@@ -46,9 +46,7 @@ def main():
     # 使用当前目录中的图片
     import os
     test_images = [
-        "Xarm_test.jpg",
-        "Xarm_test_resized.jpg",
-        "2.jpg"
+        "temp_frame.jpg"
     ]
     
     # 找到第一个存在的图片
@@ -156,4 +154,33 @@ if __name__ == "__main__":
     3. 当前目录有测试图片
     """
     main()
+
+    # import os
+    # import openai
+
+    # client = OpenAI(
+    #     api_key=api_key or os.getenv("DASHSCOPE_API_KEY"),
+    #     base_url=base_url
+    # )
+    # model_name = "qwen3-vl-32b-instruct"
+
+    # response = client.chat.completions.create(
+    #     model=,
+    #     messages=[
+    #         {
+    #             "role": "user",
+    #             "content": [
+    #                 {"type": "text", "text": user_prompt},
+    #                 {
+    #                     "type": "image_url",
+    #                     "image_url": {"url": f"data:image/jpeg;base64,{b64}"}
+    #                 }
+    #             ]
+    #         }
+    #     ],
+    #     temperature=0.0
+    # )
+        
+    #     # 解析返回结果
+    # content = response.choices[0].message.content.strip()
 
