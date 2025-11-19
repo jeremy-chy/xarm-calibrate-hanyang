@@ -616,7 +616,7 @@ class Robot:
         # Gripper is 175mm below the flange center
         flange_x = target_x - 15.0
         flange_y = target_y
-        flange_z = target_z + 175.0  # Subtract gripper height
+        flange_z = target_z + 170.0  # Subtract gripper height
         
         # Construct target pose [X, Y, Z, roll, pitch, yaw]
         # Keep orientation unchanged
@@ -760,6 +760,22 @@ class Robot:
             print(f"   ✓ Action executed successfully")
             print(f"\nStep {step + 1} completed.")
             step += 1
+
+        # Capture and save final observation after the last step
+        if save_data:
+            print(f"\n=== Final Observation (after Step {step}) ===")
+            print("Capturing final frame...")
+            try:
+                _, color_frame = self.capture_frame()
+                # Convert RealSense frame to numpy array (RGB)
+                color_image_save = np.asanyarray(color_frame.get_data())
+                # Convert to BGR for OpenCV saving
+                color_image_bgr = cv2.cvtColor(color_image_save, cv2.COLOR_RGB2BGR)
+                image_path = os.path.join(save_dir, f"step_{step}.jpg")
+                cv2.imwrite(image_path, color_image_bgr)
+                print(f"   Saved final step image to {image_path}")
+            except Exception as e:
+                print(f"   Warning: Failed to save final observation: {e}")
     
     def cleanup(self):
         """Clean up resources."""
@@ -788,9 +804,14 @@ if __name__ == "__main__":
         # vision_instruction: what to detect with the vision module
         # task_instruction: what task to perform (for the LLM policy)
         robot.execute(
-            max_steps=5,
+            max_steps=10,
             vision_instruction="find all cubes and all bowls on the table",
-            task_instruction="Put the red cube into the blue bowl"
+            task_instruction="Pick up the red cube and place it into the green container",
+            save_data=True,
+            data_root_dir="/home/hanyang/Downloads/xarm-calibrate-hanyang/data",
+            task_name="Place",
+            task_number=6,
+            subset_name="base"
         )
     except KeyboardInterrupt:
         print("\nInterrupted by user.")

@@ -94,7 +94,7 @@ class VisionModule:
         user_prompt = (
             f"{instruction}\n"
             "For each object, return its bounding box coordinates.\n"
-            "Strictly follow the format below:\n"
+            "Follow the format below:\n"
             "{\n"
             '  "objects": [\n'
             "    {\n"
