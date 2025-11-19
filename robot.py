@@ -1,3 +1,4 @@
+import os
 import time
 import pickle
 import numpy as np
@@ -414,8 +415,8 @@ class Robot:
         
         Returns:
             action: 4D vector [x, y, z, gripper_state] in millimeters
-                   - (x, y, z): target position in base frame (mm)
-                   - gripper_state: 1=open, 0=closed
+            prompt_text: The text prompt sent to the model
+            response: The raw response string from the model
         """
         # Step 1: Convert points_era_world to model coordinates based on mode
         if self.coordinate_mode == "discrete":
@@ -444,28 +445,35 @@ class Robot:
             interaction_history_context = []
         interaction_history = str(interaction_history_context)
         
-        # Step 4: Send image directly as numpy array (will be base64 encoded by client)
+        # Step 4: Construct message and send request
         print(f"   Calling ERA model with:")
         print(f"   - Coordinate mode: {self.coordinate_mode}")
         print(f"   - Instruction: {instruction}")
         print(f"   - Object info: {object_info}")
         print(f"   - Interaction history: {interaction_history}")
 
-        # if self.saved_object_info is None:
-        #     self.saved_object_info = object_info
-        #     print(f"   Saved object_info for future steps: {object_info}")
-        # else:
-        #     object_info = self.saved_object_info
-        #     print(f"   Reusing saved object_info: {object_info}")
-        
-        # Step 5: Call ERA client to get response
-        # Pass numpy array directly, client will handle base64 encoding
-        response = self.era_client.send_manipulation_request(
-            images=[color_image],  # Pass numpy array directly
+        # Construct message explicitly to access the prompt text
+        message = self.era_client.get_message_era(
+            images=[color_image],
             instruction=instruction,
             object_info=object_info,
             interaction_history=interaction_history,
-            encode_to_base64=True  # Enable base64 encoding for remote server
+            encode_to_base64=True
+        )
+
+        # Extract the text prompt (2nd element of user content)
+        # Structure: message[1] is user role, content[1] is text dict
+        try:
+            prompt_text = message[1]["content"][1]["text"]
+        except (IndexError, KeyError, TypeError):
+            prompt_text = "Error extracting prompt text"
+
+        # Send request using the constructed message
+        response = self.era_client.get_response_from_url(
+            message=message,
+            mode="self-plan", # Default used in send_manipulation_request
+            temperature=0.01, # Default
+            max_new_tokens=1024 # Default
         )
         
         print(f"   ERA model response: {response}")
@@ -521,7 +529,7 @@ class Robot:
         
         print(f"   Policy (step {step}): Action [{action[0]}, {action[1]}, {action[2]}, {action[3]}] mm")
         
-        return action
+        return action, prompt_text, response
     
     def _parse_era_response(self, response):
         """
@@ -643,7 +651,12 @@ class Robot:
         print(f"   ✓ Grasp operation completed")
     
     def execute(self, max_steps=100, vision_instruction="find all cubes", 
-                task_instruction="Pick up the object"):
+                task_instruction="Pick up the object",
+                save_data=False,
+                data_root_dir="data",
+                task_name="task",
+                task_number=0,
+                subset_name="default"):
         """
         Execute the grasping task in a loop.
         
@@ -651,10 +664,29 @@ class Robot:
             max_steps: Maximum number of steps to execute
             vision_instruction: Text instruction for object detection (e.g., "find all cubes")
             task_instruction: Text instruction for the policy/task (e.g., "Pick up the red cube")
+            save_data: Whether to save the trajectory data
+            data_root_dir: Root directory for saving data
+            task_name: Name of the task
+            task_number: Task number/ID
+            subset_name: Subset name/ID
         """
         print("Starting execution...")
         step = 0
         
+        # Setup saving directory
+        save_dir = None
+        record_file = None
+        if save_data:
+            folder_name = f"{task_name}_{task_number}_{subset_name}"
+            save_dir = os.path.join(data_root_dir, folder_name)
+            os.makedirs(save_dir, exist_ok=True)
+            record_file = os.path.join(save_dir, "record.txt")
+            print(f"Saving data to: {save_dir}")
+            # Clear existing record file if starting new
+            with open(record_file, 'w') as f:
+                f.write(f"Task: {task_name}, Number: {task_number}, Subset: {subset_name}\n")
+                f.write("="*50 + "\n\n")
+
         while step < max_steps:
             print(f"\n=== Step {step + 1} ===")
             
@@ -663,6 +695,16 @@ class Robot:
             depth_frame, color_frame = self.capture_frame()
             print("   ✓ Frame captured successfully")
             
+            # Save image for this step if enabled
+            if save_data:
+                # Convert RealSense frame to numpy array (RGB)
+                color_image_save = np.asanyarray(color_frame.get_data())
+                # Convert to BGR for OpenCV saving
+                color_image_bgr = cv2.cvtColor(color_image_save, cv2.COLOR_RGB2BGR)
+                image_path = os.path.join(save_dir, f"step_{step}.jpg")
+                cv2.imwrite(image_path, color_image_bgr)
+                print(f"   Saved step image to {image_path}")
+
             # Step 2: Get object masks from vision module
             print(f"2. Getting object masks from vision module (instruction: '{vision_instruction}')...")
             masks, boxes, scores = self.get_object_mask(color_frame, instruction=vision_instruction)
@@ -696,8 +738,20 @@ class Robot:
             # Get color image as numpy array for policy
             color_image = np.asanyarray(color_frame.get_data())
             
-            # Call policy to get the 4D action vector
-            action = self.policy(step + 1, color_image, points_era_world, instruction=task_instruction)
+            # Call policy to get the 4D action vector and prompt details
+            action, prompt_text, response_text = self.policy(step + 1, color_image, points_era_world, instruction=task_instruction)
+            
+            # Save record if enabled
+            if save_data:
+                with open(record_file, 'a') as f:
+                    f.write(f"Step {step}\n")
+                    f.write("-" * 20 + "\n")
+                    f.write("Model Input (Final Prompt):\n")
+                    f.write(f"{prompt_text}\n\n")
+                    f.write("Model Response:\n")
+                    f.write(f"{response_text}\n")
+                    f.write("=" * 50 + "\n\n")
+                print(f"   Saved record for step {step}")
             
             # Execute the action using grasp
             print(f"   Executing action: [{action[0]:.1f}, {action[1]:.1f}, {action[2]:.1f}, {action[3]}]")

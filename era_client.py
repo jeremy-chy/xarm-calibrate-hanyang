@@ -227,7 +227,7 @@ class ERAClient:
 # Example usage
 if __name__ == "__main__":
     # Initialize client
-    client = ERAClient(server_url="http://127.0.0.1:5050")
+    client = ERAClient(server_url="http://127.0.0.1:22221")
     
     # Example 1: Using the convenience method
     response = client.send_manipulation_request(
