@@ -672,6 +672,7 @@ class Robot:
         """
         print("Starting execution...")
         step = 0
+        last_points_era_world = None
         
         # Setup saving directory
         save_dir = None
@@ -708,29 +709,43 @@ class Robot:
             # Step 2: Get object masks from vision module
             print(f"2. Getting object masks from vision module (instruction: '{vision_instruction}')...")
             masks, boxes, scores = self.get_object_mask(color_frame, instruction=vision_instruction)
-            print(f"   ✓ Detected {len(masks)} objects")
             
-            # Check if any objects were detected
-            if len(masks) == 0:
+            points_era_world = None
+
+            if masks is None:
+                print("   ⚠ Vision module failed (JSON error).")
+                if last_points_era_world is not None:
+                    print("   Using last known object coordinates.")
+                    points_era_world = last_points_era_world
+                else:
+                    print("   ⚠ No previous object info available. Skipping this step.")
+                    step += 1
+                    continue
+            elif len(masks) == 0:
+                print(f"   ✓ Detected {len(masks)} objects")
                 print("   ⚠ No objects detected. Skipping this step.")
                 step += 1
                 continue
-            
-            # Step 3: Convert 2D masks to 3D in camera frame
-            print("3. Converting masks to 3D coordinates in camera frame...")
-            points_camera = self.mask_to_camera_3d(masks, depth_frame, color_frame)
-            print(f"   ✓ Extracted {len(points_camera)} valid 3D centroids")
-            
-            # Check if any valid points were extracted
-            if len(points_camera) == 0:
-                print("   ⚠ No valid 3D points extracted. Skipping this step.")
-                step += 1
-                continue
-            
-            # Step 4: Transform to era-world frame
-            print("4. Transforming coordinates to era-world frame...")
-            points_era_world = self.camera_to_era_world_transform(points_camera)
-            print(f"   ✓ Transformed {len(points_era_world)} points to era-world frame")
+            else:
+                print(f"   ✓ Detected {len(masks)} objects")
+                
+                # Step 3: Convert 2D masks to 3D in camera frame
+                print("3. Converting masks to 3D coordinates in camera frame...")
+                points_camera = self.mask_to_camera_3d(masks, depth_frame, color_frame)
+                print(f"   ✓ Extracted {len(points_camera)} valid 3D centroids")
+                
+                # Check if any valid points were extracted
+                if len(points_camera) == 0:
+                    print("   ⚠ No valid 3D points extracted. Skipping this step.")
+                    step += 1
+                    continue
+                
+                # Step 4: Transform to era-world frame
+                print("4. Transforming coordinates to era-world frame...")
+                points_era_world = self.camera_to_era_world_transform(points_camera)
+                print(f"   ✓ Transformed {len(points_era_world)} points to era-world frame")
+
+                last_points_era_world = points_era_world
             
             # Step 5: Execute action from policy
             print("5. Executing action from policy...")

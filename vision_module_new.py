@@ -145,7 +145,7 @@ class VisionModule:
             result = json.loads(content)
         except json.JSONDecodeError as e:
             print(f"[错误] Qwen VLM 返回的内容不是合法 JSON: {content}")
-            raise e
+            return None
         
         return result
     
@@ -191,6 +191,10 @@ class VisionModule:
         # 调用 Qwen VLM API
         detection_result = self._detect_objects_with_qwen(image_path, instruction)
         
+        if detection_result is None:
+            print("[警告] 检测失败 (JSON解析错误)")
+            return None, None, None
+
         # 解析检测结果
         objects = detection_result.get("objects", [])
         print(f"[Qwen VLM] 检测到 {len(objects)} 个目标物体")
